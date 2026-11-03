@@ -1,0 +1,2 @@
+Source: https://github.com/khromov/supvan-katasymbol-printer-web-ui
+Files retrieved for attribution, comparison and offline tests. MIT license in LICENSE.

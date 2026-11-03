@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+printer.json*
+certs/
+*.key
+*.pem
+*.p12
+*.pfx
+.DS_Store
+.pytest_cache/
+.coverage
+htmlcov/
