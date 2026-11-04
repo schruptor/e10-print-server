@@ -16,3 +16,4 @@ certs/
 .coverage
 htmlcov/
 .runtime/
+dist/
