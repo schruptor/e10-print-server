@@ -5,8 +5,8 @@ const fs = require('node:fs');
 const source = fs.readFileSync('e10_server.py', 'utf8');
 const script = source.match(/<script>([\s\S]*?)<\/script>/)[1];
 const elements = {};
-for (const id of ['text','font','density','copies','image','previewInfo','state','msg','devices','print','scan','connect','disconnect']) {
-    elements[id] = {value: '', style: {}, options: [], listeners: {},
+for (const id of ['text','font','density','copies','image','previewInfo','state','msg','toastText','toastClose','devices','print','scan','connect','disconnect']) {
+    elements[id] = {value: '', style: {}, dataset: {}, options: [], listeners: {},
         addEventListener(event, fn) { this.listeners[event] = fn; }};
 }
 Object.assign(elements.text, {value: 'Hallo'});
@@ -62,5 +62,21 @@ const reply = (index, image) => previews[index].resolve({ok:true,json:async()=>(
     reply(3,'blank'); await settle();
     assert.equal(elements.image.src,'blank');
     assert.equal(elements.image.hidden,undefined);
-    console.log('Live preview: initial render, all controls, paste, stale replies, empty text OK');
+    vm.runInNewContext("showToast('<b>Fehler</b>','error',10000)",context);
+    assert.equal(elements.msg.hidden,false);
+    assert.equal(elements.msg.dataset.tone,'error');
+    assert.equal(elements.toastText.textContent,'<b>Fehler</b>','messages must be plain text');
+    elements.toastClose.onclick();
+    assert.equal(elements.msg.hidden,true);
+    vm.runInNewContext("showToast('Fertig.','success',5000)",context);
+    timer();
+    assert.equal(elements.msg.hidden,true,'toast should auto-dismiss');
+    await vm.runInNewContext("run(async()=>{throw Error('Drucker nicht gefunden')})",context);
+    assert.equal(elements.msg.dataset.tone,'error');
+    assert.equal(elements.toastText.textContent,'Drucker nicht gefunden');
+    await vm.runInNewContext("run(async()=>{})",context);
+    assert.equal(elements.msg.dataset.tone,'success');
+    assert.equal(elements.toastText.textContent,'Fertig.');
+    assert.ok(source.includes('#msg{position:fixed;top:'));
+    console.log('Live preview and toast messages: OK');
 })().catch(e=>{console.error(e);process.exitCode=1;});
