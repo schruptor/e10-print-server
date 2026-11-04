@@ -3,9 +3,36 @@
 Experimenteller Python-Port für E10/T15 über Bluetooth LE. Eine Python-Datei enthält Weboberfläche,
 HTTP-API und Treiber. Keine Cloud, kein Node.js für den Betrieb. Unterstütztes Ziel: macOS, Linux,
 Windows mit einem funktionierenden Bluetooth-LE-Adapter. Tatsächlich eingerichtet und offline getestet
-wurde bisher nur der Mac; Hardware-Druck und andere Betriebssysteme sind noch nicht bestätigt.
+wurde der Mac. Zusätzlich wurden die portable Windows-Laufzeit, ihre Imports,
+Textdarstellung und der HTTP-Serverstart erfolgreich auf einem Windows-GitHub-Runner geprüft.
+Bluetooth-Hardwaredruck auf dem Windows-Ziel-PC und Linux-Betrieb sind noch nicht bestätigt.
 
-## Schnellstart
+## Windows ohne Installation (portables ZIP)
+
+**Python und alle Bibliotheken sind bereits enthalten.** Keine Python-Installation,
+kein `install.cmd` und kein Paketdownload beim ersten Start nötig.
+
+1. Öffne [Portable Windows ZIP – Builds](https://github.com/schruptor/e10-print-server/actions/workflows/portable-windows.yml).
+2. Wähle einen erfolgreichen Lauf und lade unter **Artifacts** das Artefakt
+   **e10-portable-windows-x64** herunter (GitHub-Anmeldung und Repository-Zugriff erforderlich).
+3. Entpacke das Artefakt. Darin liegt `e10-print-server-portable-windows-x64.zip`
+   samt SHA-256-Datei. **Dieses innere ZIP kann direkt weitergegeben werden.**
+4. Entpacke das portable ZIP vollständig in einen beschreibbaren Ordner.
+5. Doppelklicke auf **`start.cmd`**. Der Browser öffnet
+   **http://127.0.0.1:1312**.
+6. Bluetooth aktivieren, E10 einschalten, Handy-Verbindung trennen und den Drucker
+   auf der Webseite suchen und verbinden.
+
+Voraussetzung: **Windows 11 x64 (Intel/AMD) mit Bluetooth LE** und Endlosband.
+`restart.cmd` startet neu, `stop.cmd` beendet den Server – nur zwischen Druckaufträgen.
+Konfiguration: `.env`; Fehlerprotokoll: `.runtime/stderr.log`.
+
+**Wichtig:** GitHubs **Code → Download ZIP** enthält nur den Quellcode, nicht die
+portable Python-Laufzeit. Build-Artefakte bleiben 30 Tage verfügbar; das heruntergeladene
+portable ZIP ist davon unabhängig weiter nutzbar.
+Weitere Details und Build-Anleitung: [PORTABLE-WINDOWS.md](PORTABLE-WINDOWS.md).
+
+## Schnellstart aus dem Quellcode
 
 ```sh
 git clone https://github.com/schruptor/e10-print-server.git
@@ -61,7 +88,7 @@ cp .env.example .env
 .venv/bin/python e10_server.py
 ```
 
-### Windows: Installation und Verwaltung per Doppelklick
+### Windows aus dem Quellcode: Installation und Verwaltung per Doppelklick
 
 Voraussetzungen: Windows 11 mit Bluetooth LE und installiertes **CPython 3.12–3.14**
 (inklusive Python-Launcher oder `python` im PATH). Der Installer installiert Python

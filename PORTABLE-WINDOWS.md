@@ -4,6 +4,21 @@ Das **portable Paket** enthält eine offizielle eingebettete CPython-3.14.7-Lauf
 und Windows-x64-Abhängigkeiten. Der normale GitHub-Quellcode-Download enthält diese
 Laufzeit nicht!
 
+## Download
+
+Öffne [Portable Windows ZIP – Builds](https://github.com/schruptor/e10-print-server/actions/workflows/portable-windows.yml),
+wähle einen erfolgreichen Lauf und lade unter **Artifacts** das Artefakt
+**e10-portable-windows-x64** herunter. Dafür sind GitHub-Anmeldung und Zugriff
+auf das Repository erforderlich.
+
+Entpacke das Artefakt: Darin liegen das portable ZIP und seine SHA-256-Datei.
+Das innere ZIP kann ohne GitHub-Zugang an den Empfänger weitergegeben werden.
+Artefakte werden 30 Tage aufbewahrt; bereits heruntergeladene Pakete bleiben nutzbar.
+
+Der erste Build wurde erfolgreich auf einem Windows-GitHub-Runner geprüft:
+Laufzeit-Imports, Textdarstellung und HTTP-Serverstart. Bluetooth-Hardwaredruck
+auf dem Ziel-PC bleibt ungetestet.
+
 ## Für Empfänger
 
 1. `e10-print-server-portable-windows-x64.zip` vollständig entpacken.
