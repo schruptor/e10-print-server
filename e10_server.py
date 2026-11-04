@@ -13,6 +13,7 @@ import ipaddress
 import json
 import logging
 import lzma
+import math
 import os
 from pathlib import Path
 import struct
@@ -47,7 +48,7 @@ class Settings:
         load_dotenv(ROOT / '.env', override=False)
         host = os.getenv('SERVER_IP', '127.0.0.1')
         ipaddress.ip_address(host)
-        port = int(os.getenv('SERVER_PORT', '8080'))
+        port = int(os.getenv('SERVER_PORT', '1312'))
         if not 1 <= port <= 65535:
             raise ValueError('SERVER_PORT must be between 1 and 65535')
         scheme = os.getenv('SERVER_SCHEME', 'http').lower()
@@ -171,10 +172,14 @@ class DeviceChoice(BaseModel):
 
 class PrintSpec(BaseModel):
     text: str = Field(max_length=1000)
-    length_mm: int = Field(default=50, ge=10, le=200)
-    font_size: int = Field(default=36, ge=10, le=80)
+    font_size: int = Field(default=50, ge=10, le=80)
     density: int = Field(default=4, ge=1, le=7)
     copies: int = Field(default=1, ge=1, le=10)
+
+
+DPMM = 8
+TEXT_MARGIN_DOTS = 4 * DPMM  # 4 mm on either side of the visible text.
+MAX_LABEL_DOTS = 200 * DPMM
 
 
 def render(spec, font_path=None):
@@ -184,9 +189,8 @@ def render(spec, font_path=None):
         '/System/Library/Fonts/Supplemental/Arial.ttf',
         '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
         str(Path(os.environ.get('WINDIR', 'C:/Windows')) / 'Fonts' / 'arial.ttf')]
-    image = Image.new('L', (spec.length_mm * 8, 96), 255)
-    draw = ImageDraw.Draw(image)
-    text = spec.text.replace('\t', '    ').replace('\r\n', '\n')
+    measure = ImageDraw.Draw(Image.new('L', (1, 1), 255))
+    text = spec.text.replace('\t', '    ').replace('\r\n', '\n').strip()
     for size in range(spec.font_size, 9, -1):
         font = None
         for path in paths:
@@ -197,13 +201,27 @@ def render(spec, font_path=None):
                 pass
         if font is None:
             font = ImageFont.load_default(size=size)
-        box = draw.multiline_textbbox((0, 0), text, font=font, spacing=2, align='center')
+        box = measure.multiline_textbbox((0, 0), text, font=font, spacing=2, align='center')
+        box = (math.floor(box[0]), math.floor(box[1]), math.ceil(box[2]), math.ceil(box[3]))
         w, h = box[2] - box[0], box[3] - box[1]
-        if w <= image.width - 16 and h <= 88:
-            draw.multiline_text(((image.width-w)//2-box[0], (96-h)//2-box[1]), text,
-                                font=font, spacing=2, align='center', fill=0)
-            return image.point(lambda p: 0 if p < 128 else 255)
-    raise ValueError('Text passt nicht auf das Etikett. Text kürzen oder Etikett verlängern.')
+        # Shrink only for vertical fit; text width determines the tape length.
+        if h > 88:
+            continue
+        if w + 2 * TEXT_MARGIN_DOTS > MAX_LABEL_DOTS:
+            raise ValueError('Automatische Länge über 200 mm. Text kürzen oder Schriftgröße reduzieren.')
+        ink = Image.new('L', (max(1, w), max(1, h)), 255)
+        ImageDraw.Draw(ink).multiline_text((-box[0], -box[1]), text, font=font,
+                                          spacing=2, align='center', fill=0)
+        ink = ink.point(lambda p: 0 if p < 128 else 255)
+        bounds = ink.point(lambda p: 255 - p).getbbox()
+        if bounds is None:
+            raise ValueError('Text enthält keine darstellbaren Druckpunkte')
+        ink = ink.crop(bounds)
+        image = Image.new('L', (ink.width + 2 * TEXT_MARGIN_DOTS, 96), 255)
+        image.paste(ink, (TEXT_MARGIN_DOTS, (96 - ink.height) // 2))
+        image.info['font_size'] = size
+        return image
+    raise ValueError('Text ist zu hoch für das Band. Weniger Zeilen oder kleinere Schrift verwenden.')
 
 
 class E10:
@@ -388,8 +406,8 @@ class E10:
         self.phase = 'Prüfe Drucker und Material'
         await self.wait_status(lambda s: not s['busy'] and not s['printing'], 10)
         media = await self.read_material()
-        if media['die_cut'] and media['length_mm'] and abs(media['length_mm'] - spec.length_mm) > 1:
-            raise RuntimeError(f"Etikettenlänge passt nicht: Material meldet {media['length_mm']} mm")
+        if media['die_cut']:
+            raise RuntimeError('Automatische Textlänge benötigt Endlosband, keine vorgestanzten Etiketten.')
         _, streams, back = encode_job(image, spec.density, media['die_cut'], media['gap'], spec.copies)
         with suppress(RuntimeError):
             await self.command(0xc9, spec.density * 10 + 70)
@@ -433,10 +451,10 @@ HTML = r'''<!doctype html><html lang="de"><meta charset="utf-8"><meta name="view
 <style>body{font:16px system-ui;background:#10151c;color:#eee;margin:auto;padding:24px;max-width:760px}section{background:#1c2530;border-radius:14px;padding:20px;margin:18px 0}input,select,textarea,button{font:inherit;padding:10px;border-radius:7px;border:1px solid #617183;box-sizing:border-box}textarea{width:100%;min-height:110px}button{background:#81dcbb;color:#10211c;cursor:pointer;margin:8px 4px 8px 0}button:disabled{opacity:.4}label{display:inline-block;margin:8px 12px 8px 0}input[type=number]{width:100px}img{max-width:100%;height:auto;background:white;image-rendering:pixelated;border:8px solid white}#msg{white-space:pre-wrap}small{color:#bbc8d5}</style>
 <h1>E10 · Textdruck</h1><small>Experimenteller Treiber · Erst mit einem einzelnen kurzen Etikett testen.</small>
 <section><h2>1. Drucker auswählen</h2><button id="scan">Drucker suchen</button><select id="devices" aria-label="Bluetooth-Drucker"></select><button id="connect">Verbinden</button><button id="disconnect">Trennen</button><p id="state">Nicht verbunden</p><small>Der E10 kann einen Namen wie T0179… haben. Die Suche läuft auf dem Server, nicht auf dem iPhone.</small></section>
-<section><h2>2. Text gestalten</h2><textarea id="text" maxlength="1000" placeholder="Dein Etikettentext">Hallo E10!</textarea><label>Länge (mm)<br><input id="length" type="number" min="10" max="200" value="50"></label><label>Schriftgröße (max.)<br><input id="font" type="number" min="10" max="80" value="36"></label><label>Dichte<br><input id="density" type="number" min="1" max="7" value="4"></label><label>Kopien<br><input id="copies" type="number" min="1" max="10" value="1"></label><p><small>96 Druckpunkte hoch, Text mittig in 88 Punkten. Schrift wird bei Bedarf verkleinert; kein stilles Abschneiden. Emojis benötigen eine passende Schrift.</small></p><button id="print">Drucken</button><h3>Live-Vorschau</h3><p><img id="image" alt="Etikettenvorschau" width="400" height="96" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></p><p id="previewInfo" role="status" aria-live="polite"></p><small>Vorschau eines Etiketts. Dichte steuert die Druckwärme, nicht die Bildschirmdarstellung. Zwischen Kopien: 5 Sekunden Zeit zum Schneiden.</small></section><p id="msg" role="status"></p>
+<section><h2>2. Text gestalten</h2><textarea id="text" maxlength="1000" placeholder="Dein Etikettentext">Hallo E10!</textarea><label>Schriftgröße (max.)<br><input id="font" type="number" min="10" max="80" value="50"></label><label>Dichte<br><input id="density" type="number" min="1" max="7" value="4"></label><label>Kopien<br><input id="copies" type="number" min="1" max="10" value="1"></label><p><small>Automatische Länge: Textbreite + 4 mm Rand davor und danach. Schriftgröße standardmäßig 50; nur bei zu vielen Zeilen verkleinert. Endlosband erforderlich. Maximal 200 mm Länge.</small></p><button id="print">Drucken</button><h3>Live-Vorschau</h3><p><img id="image" alt="Etikettenvorschau" width="400" height="96" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></p><p id="previewInfo" role="status" aria-live="polite"></p><small>Vorschau eines Etiketts. Dichte steuert die Druckwärme, nicht die Bildschirmdarstellung. Zwischen Kopien: 5 Sekunden Zeit zum Schneiden.</small></section><p id="msg" role="status"></p>
 <script>
 const $=id=>document.getElementById(id);let busy=false,connected=false;
-const spec=()=>({text:$('text').value,length_mm:Number($('length').value),font_size:Number($('font').value),density:Number($('density').value),copies:Number($('copies').value)});
+const spec=()=>({text:$('text').value,font_size:Number($('font').value),density:Number($('density').value),copies:Number($('copies').value)});
 async function api(path,data,signal){const r=await fetch('/api/'+path,{method:data===undefined?'GET':'POST',headers:{'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data),signal});let v=await r.json();if(!r.ok)throw Error(typeof v.detail==='string'?v.detail:JSON.stringify(v.detail));return v}
 async function status(){const s=await api('status');connected=s.connected;$('state').textContent=(connected?'Verbunden: ':'Nicht verbunden: ')+(s.selected?.name||'kein Drucker ausgewählt')+' · '+s.phase;if(s.selected&&!$('devices').options.length){const o=new Option(s.selected.name+' (gespeichert)',s.selected.address);$('devices').add(o)}}
 async function run(fn){if(busy)return;busy=true;document.querySelectorAll('button').forEach(b=>b.disabled=true);$('msg').textContent='Bitte warten …';try{await fn();$('msg').textContent='Fertig.'}catch(e){$('msg').textContent=e.message}finally{busy=false;document.querySelectorAll('button').forEach(b=>b.disabled=false);try{await status()}catch{}}}
@@ -452,9 +470,9 @@ async function updatePreview(revision=++previewRevision){
         const p=await api('preview',data,request.signal);
         if(revision!==previewRevision)return;
         $('image').src=p.image;
-        $('image').width=data.length_mm*8;$('image').height=96;
+        $('image').width=p.width_px;$('image').height=p.height_px;
         $('image').style.opacity='1';
-        $('previewInfo').textContent=data.length_mm+' mm · Dichte '+data.density+' · '+data.copies+' Kopie(n)'+(data.copies>1?' · 5 s Schneidepause zwischen Kopien':'');
+        $('previewInfo').textContent=p.length_mm+' mm automatisch · Rand je 4 mm · Schrift '+p.font_size+' · Dichte '+data.density+' · '+data.copies+' Kopie(n)'+(data.copies>1?' · 5 s Schneidepause zwischen Kopien':'');
     }catch(e){
         if(revision!==previewRevision||e.name==='AbortError')return;
         $('image').style.opacity='.35';
@@ -468,7 +486,7 @@ function schedulePreview(){
     $('previewInfo').textContent='Vorschau wird aktualisiert …';
     previewTimer=setTimeout(()=>updatePreview(revision),200);
 }
-for(const id of ['text','length','font','density','copies']){
+for(const id of ['text','font','density','copies']){
     $(id).addEventListener('input',schedulePreview);
     $(id).addEventListener('change',schedulePreview);
 }
@@ -559,12 +577,15 @@ def create_app(settings):
     async def preview(spec: PrintSpec):
         try:
             image = (render(spec, settings.font) if spec.text.strip() else
-                     Image.new('L', (spec.length_mm * 8, 96), 255))
+                     Image.new('L', (2 * TEXT_MARGIN_DOTS, 96), 255))
         except (ValueError, UnicodeError) as exc:
             raise HTTPException(400, str(exc)) from exc
         b = io.BytesIO()
         image.save(b, format='PNG')
-        return {'image': 'data:image/png;base64,' + base64.b64encode(b.getvalue()).decode()}
+        return {'image': 'data:image/png;base64,' + base64.b64encode(b.getvalue()).decode(),
+                'width_px': image.width, 'height_px': image.height,
+                'length_mm': image.width / DPMM, 'margin_mm': 4,
+                'font_size': image.info.get('font_size', spec.font_size)}
 
     @app.post('/api/print')
     async def print_label(spec: PrintSpec):

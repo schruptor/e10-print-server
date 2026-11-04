@@ -18,7 +18,9 @@ Es gibt keine Anmeldung. Jeder mit Netzwerkzugriff auf den Server kann drucken.
 
 ## Funktionen
 
-- Browseroberfläche mit Druckerauswahl, Text, Länge, Dichte und Kopien.
+- Browseroberfläche mit Druckerauswahl, Text, Schriftgröße, Dichte und Kopien.
+- Automatische Etikettenlänge: sichtbare Textbreite plus je 4 mm Rand davor und danach. Standardschriftgröße 50. Keine manuelle Längeneingabe; maximal 200 mm Gesamtlänge.
+- Endlosband erforderlich. Zu langer Text wird nicht abgeschnitten; Schrift bei Bedarf selbst verkleinern. Nur mehrzeiliger Text wird automatisch für die verfügbare Höhe verkleinert.
 - Immer sichtbare Live-Vorschau: aktualisiert sich beim Einfügen/Tippen und bei jeder Einstellungsänderung (200 ms nach der letzten Eingabe).
 - Kopien als separate Druckaufträge: erst Druckabschluss abwarten, dann fünf Sekunden Schneidepause mit Countdown, danach die nächste Kopie. Keine Pause nach der letzten Kopie.
 - Die Vorschau zeigt ein Etikett; Dichte beeinflusst die Druckwärme, nicht die Bildschirmdarstellung. Kopienzahl und Pausen werden daneben angezeigt.
@@ -34,12 +36,13 @@ cd ~/e10-print-server
 .venv/bin/python e10_server.py
 ```
 
-Dann http://127.0.0.1:8080 öffnen. Kein Zugriffsschlüssel erforderlich.
+Dann http://127.0.0.1:1312 öffnen. Kein Zugriffsschlüssel erforderlich.
 E10 einschalten, gegebenenfalls Verbindung der iPhone-App trennen, **Drucker suchen**,
 den eigenen E10 (oft T0… als Bluetooth-Name) auswählen und **Verbinden**.
 Die Liste enthält auch ähnliche Supvan-Geräte: nur den eigenen E10 auswählen.
 Die erfolgreiche Auswahl wird lokal in `printer.json` gespeichert; nach Neustart explizit verbinden.
-Text eingeben, Länge passend zum eingelegten Band wählen, Vorschau prüfen, mit einer Kopie testen.
+Endlosband einlegen, Text eingeben und Schriftgröße wählen, automatische Länge in der Vorschau prüfen, mit einer Kopie testen.
+Die 4-mm-Ränder sind im Druckbild pixelgenau enthalten; tatsächliche Schnittabstände am Gerät bitte beim ersten Druck prüfen.
 Die maximale Textfläche ist 88 Punkte hoch, zentriert auf dem 96-Punkte-Druckkopf.
 
 Die Oberfläche löst keine Druckvorgänge beim Laden aus. Erst der Druckknopf sendet einen Auftrag.
@@ -116,7 +119,7 @@ Siehe https://bleak.readthedocs.io/en/latest/ .
 
 ```dotenv
 SERVER_IP=127.0.0.1
-SERVER_PORT=8080
+SERVER_PORT=1312
 SERVER_SCHEME=http
 SSL_CERT_FILE=
 SSL_KEY_FILE=
@@ -155,7 +158,7 @@ aufrufenden Gerät vertraut sein. TLS-Konfiguration: https://uvicorn.dev/setting
 ## Zugriff vom iPhone
 
 `SERVER_IP=0.0.0.0` setzen, neu starten und auf dem iPhone im selben WLAN
-`http://<LAN-IP-des-Mac>:8080` öffnen (bei HTTPS entsprechend `https` und den eingestellten Port).
+`http://<LAN-IP-des-Mac>:1312` öffnen (bei HTTPS entsprechend `https` und den eingestellten Port).
 `0.0.0.0` ist keine Zieladresse im Browser. Firewall und WLAN müssen Verbindungen erlauben.
 Bluetooth läuft ausschließlich auf dem Serverrechner: er muss eingeschaltet und nah am E10 sein.
 Der Browser benötigt keine Web-Bluetooth-Unterstützung.
@@ -176,8 +179,8 @@ Kein Benutzer-/Rechtesystem, keine Internet-Härtung. Nicht als öffentliches Dr
   validiert, aber die Akzeptanz durch die E10-Firmware noch nicht nachgewiesen.
 - BLE-Schreibkapazität muss mindestens 128 Bytes ohne Antwort erlauben. Bei kleinerem MTU bricht
   der Server ab, statt das Frameformat unkontrolliert in 20-Byte-Pakete umzuwandeln.
-- Material wird vor Druck gelesen; unlesbare Daten oder unpassende gemeldete Stanzetikettenlänge
-  verhindern den Start. Keine Umgehung der Materialerkennung oder Firmwareänderungen.
+- Material wird vor Druck gelesen; unlesbare Daten oder vorgestanzte Etiketten
+  verhindern den Start der automatischen Längenfunktion. Keine Umgehung der Materialerkennung oder Firmwareänderungen.
 - Kein automatisches Neudrucken bei Verbindungsabbrüchen, keine parallelen Aufträge.
 - Nur ein Prozess/Worker; nicht mit Reload oder mehreren Uvicorn-Workern betreiben.
 - Verschieben zwischen Betriebssystemen erfordert neue Geräteauswahl: macOS nutzt Geräte-UUIDs,

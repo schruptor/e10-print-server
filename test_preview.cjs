@@ -5,12 +5,12 @@ const fs = require('node:fs');
 const source = fs.readFileSync('e10_server.py', 'utf8');
 const script = source.match(/<script>([\s\S]*?)<\/script>/)[1];
 const elements = {};
-for (const id of ['text','length','font','density','copies','image','previewInfo','state','msg','devices','print','scan','connect','disconnect']) {
+for (const id of ['text','font','density','copies','image','previewInfo','state','msg','devices','print','scan','connect','disconnect']) {
     elements[id] = {value: '', style: {}, options: [], listeners: {},
         addEventListener(event, fn) { this.listeners[event] = fn; }};
 }
 Object.assign(elements.text, {value: 'Hallo'});
-for (const [id,value] of Object.entries({length:'50',font:'36',density:'4',copies:'1'})) elements[id].value=value;
+for (const [id,value] of Object.entries({font:'50',density:'4',copies:'1'})) elements[id].value=value;
 const previews = [];
 let timer;
 const context = {
@@ -25,25 +25,25 @@ const context = {
     }
 };
 const settle = async () => { for(let n=0;n<12;n++) await Promise.resolve(); };
-const reply = (index, image) => previews[index].resolve({ok:true,json:async()=>({image})});
+const reply = (index, image) => previews[index].resolve({ok:true,json:async()=>({image,width_px:320,height_px:96,length_mm:40,font_size:50})});
 (async()=>{
     vm.runInNewContext(script,context);
     assert.equal(previews.length,1,'preview must load immediately');
     reply(0,'initial'); await settle();
     assert.equal(elements.image.src,'initial');
-    for (const id of ['text','length','font','density','copies']) {
+    for (const id of ['text','font','density','copies']) {
         assert.equal(typeof elements[id].listeners.input,'function');
         assert.equal(typeof elements[id].listeners.change,'function');
         elements[id].listeners.input();
         assert.equal(typeof timer,'function');
     }
     elements.text.value='Pasted text';
-    elements.length.value='80';
     elements.copies.value='3';
     elements.text.listeners.input();
     timer(); await settle();
     assert.equal(previews[1].data.text,'Pasted text');
-    assert.equal(previews[1].data.length_mm,80);
+    assert.equal(previews[1].data.length_mm,undefined);
+    assert.equal(previews[1].data.font_size,50);
     assert.equal(previews[1].data.copies,3);
     // Resolve a newer preview before an older request; older results cannot win.
     elements.text.value='Newest';
@@ -51,6 +51,9 @@ const reply = (index, image) => previews[index].resolve({ok:true,json:async()=>(
     reply(2,'newest'); await settle();
     reply(1,'outdated'); await settle();
     assert.equal(elements.image.src,'newest');
+    assert.equal(elements.image.width,320);
+    assert.equal(elements.image.height,96);
+    assert.match(elements.previewInfo.textContent,/40 mm automatisch/);
     assert.match(elements.previewInfo.textContent,/3 Kopie/);
     assert.match(elements.previewInfo.textContent,/5 s/);
     elements.text.value='';

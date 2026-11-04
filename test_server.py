@@ -54,11 +54,32 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
     def test_preview(self):
-        img=e.render(e.PrintSpec(text='ÄÖÜ ß\nE10',length_mm=50))
-        self.assertEqual(img.size,(400,96))
+        img=e.render(e.PrintSpec(text='ÄÖÜ ß\nE10'))
+        self.assertEqual(img.height,96)
+        self.assertGreater(img.width,64)
         self.assertEqual(img.getextrema(),(0,255))
-        self.assertEqual(img.crop((0,0,400,4)).getextrema(),(255,255))
-        with self.assertRaises(ValueError): e.render(e.PrintSpec(text='W'*1000,length_mm=10))
+        self.assertEqual(img.crop((0,0,img.width,4)).getextrema(),(255,255))
+        with self.assertRaises(ValueError): e.render(e.PrintSpec(text='W'*1000))
+
+    def test_auto_length_and_exact_margins(self):
+        self.assertEqual(e.PrintSpec(text='Test').font_size,50)
+        widths=[]
+        for text,size in [('Hallo',30),('Hallo Welt',30),('Hallo Welt',50)]:
+            image=e.render(e.PrintSpec(text=text,font_size=size))
+            bounds=image.point(lambda p:255-p).getbbox()
+            self.assertEqual(bounds[0],32)
+            self.assertEqual(image.width-bounds[2],32)
+            self.assertEqual(image.info['font_size'],size)
+            widths.append(image.width)
+        self.assertLess(widths[0],widths[1])
+        self.assertLess(widths[1],widths[2])
+        for text in ('j', 'ÄÖÜ', 'Test\\nZweite Zeile'):
+            image=e.render(e.PrintSpec(text=text))
+            bounds=image.point(lambda p:255-p).getbbox()
+            self.assertEqual(bounds[0],32)
+            self.assertEqual(image.width-bounds[2],32)
+            self.assertGreaterEqual(bounds[1],4)
+            self.assertLessEqual(bounds[3],92)
 
     def test_receive_fragmented(self):
         p=e.E10(); f=e.command_frame(0x11)
@@ -80,7 +101,7 @@ class ProtocolTests(unittest.TestCase):
 
 class WebTests(unittest.TestCase):
     def setUp(self):
-        self.settings=e.Settings('127.0.0.1',8080,'http',None,None,None,None)
+        self.settings=e.Settings('127.0.0.1',1312,'http',None,None,None,None)
         self.app=e.create_app(self.settings)
         self.client=TestClient(self.app)
         self.headers={}
@@ -101,8 +122,11 @@ class WebTests(unittest.TestCase):
         r=self.client.post('/api/preview',headers=self.headers,json={'text':'Hallo E10'})
         self.assertEqual(r.status_code,200)
         b=base64.b64decode(r.json()['image'].split(',')[1])
-        self.assertEqual(Image.open(io.BytesIO(b)).size,(400,96))
-        for data in [{'text':'x','copies':11},{'text':'x','length_mm':201}]:
+        self.assertEqual(Image.open(io.BytesIO(b)).size,(r.json()['width_px'],96))
+        self.assertEqual(r.json()['length_mm'],r.json()['width_px']/8)
+        self.assertEqual(r.json()['margin_mm'],4)
+        self.assertEqual(r.json()['font_size'],50)
+        for data in [{'text':'x','copies':11},{'text':'x','font_size':81}]:
             self.assertEqual(self.client.post('/api/preview',headers=self.headers,json=data).status_code,422)
         r=self.client.post('/api/preview',headers=self.headers,content=b'x'*17000)
         self.assertEqual(r.status_code,413)
@@ -148,6 +172,13 @@ class CopyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events,['completed']+['second']*5+['completed']+['second']*5+['completed'])
         self.assertIn('Alle 3',printer.phase)
 
+    async def test_die_cut_rejected_before_start(self):
+        printer=e.E10()
+        with patch.object(printer,'wait_status',new_callable=AsyncMock), patch.object(printer,'read_material',new_callable=AsyncMock,return_value={'die_cut':True}), patch.object(printer,'command',new_callable=AsyncMock) as command:
+            with self.assertRaisesRegex(RuntimeError,'Endlosband'):
+                await printer.print_text(e.render(e.PrintSpec(text='Test')),e.PrintSpec(text='Test'))
+            command.assert_not_awaited()
+
     async def test_one_copy_has_no_delay(self):
         printer=e.E10()
         with patch.object(printer,'print_text',new_callable=AsyncMock) as printed, patch.object(e.asyncio,'sleep',new_callable=AsyncMock) as delay:
@@ -166,6 +197,11 @@ class CopyTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_default_port(self):
+        import os
+        with patch.dict(os.environ,{},clear=True), patch.object(e,'load_dotenv'):
+            self.assertEqual(e.Settings.read().port,1312)
+
     def test_invalid_config(self):
         import os
         for changes in [{'SERVER_PORT':'0'},{'SERVER_SCHEME':'ftp'},{'SERVER_IP':'bad'},
