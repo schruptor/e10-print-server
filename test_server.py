@@ -46,6 +46,13 @@ class ProtocolTests(unittest.TestCase):
             self.assertTrue(buffers[-1][2]&8)
             self.assertFalse(any(b[2]&8 for b in buffers[:-1]))
 
+    def test_live_preview_script(self):
+        import shutil
+        if not shutil.which('node'):
+            self.skipTest('Node not installed')
+        result=subprocess.run(['node','test_preview.cjs'],cwd=e.ROOT,text=True,capture_output=True)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
     def test_preview(self):
         img=e.render(e.PrintSpec(text='ÄÖÜ ß\nE10',length_mm=50))
         self.assertEqual(img.size,(400,96))
@@ -73,15 +80,15 @@ class ProtocolTests(unittest.TestCase):
 
 class WebTests(unittest.TestCase):
     def setUp(self):
-        self.settings=e.Settings('127.0.0.1',8080,'http',None,None,None,'test-'+'x'*32,None)
+        self.settings=e.Settings('127.0.0.1',8080,'http',None,None,None,None)
         self.app=e.create_app(self.settings)
         self.client=TestClient(self.app)
-        self.headers={'X-E10-Key':self.settings.token}
+        self.headers={}
 
-    def test_auth(self):
+    def test_without_authentication(self):
         self.assertEqual(self.client.get('/').status_code,200)
-        self.assertEqual(self.client.get('/api/status').status_code,401)
-        self.assertEqual(self.client.post('/api/print',json={'text':'no'}).status_code,401)
+        self.assertEqual(self.client.get('/api/status').status_code,200)
+        self.assertEqual(self.client.post('/api/print',json={'text':'no'}).status_code,409)
         r=self.client.get('/api/status',headers=self.headers)
         self.assertEqual(r.status_code,200)
         self.assertIn('no-store',r.headers['cache-control'])
@@ -95,12 +102,15 @@ class WebTests(unittest.TestCase):
         self.assertEqual(r.status_code,200)
         b=base64.b64decode(r.json()['image'].split(',')[1])
         self.assertEqual(Image.open(io.BytesIO(b)).size,(400,96))
-        for data in [{'text':''},{'text':'x','copies':11},{'text':'x','length_mm':201}]:
+        for data in [{'text':'x','copies':11},{'text':'x','length_mm':201}]:
             self.assertEqual(self.client.post('/api/preview',headers=self.headers,json=data).status_code,422)
         r=self.client.post('/api/preview',headers=self.headers,content=b'x'*17000)
         self.assertEqual(r.status_code,413)
-        r=self.client.post('/api/preview',headers=self.headers,json={'text':' '*5})
-        self.assertEqual(r.status_code,400)
+        for text in ('', ' '*5):
+            r=self.client.post('/api/preview',headers=self.headers,json={'text':text})
+            self.assertEqual(r.status_code,200)
+            image=Image.open(io.BytesIO(base64.b64decode(r.json()['image'].split(',')[1])))
+            self.assertEqual(image.getextrema(),(255,255))
 
     def test_print_not_connected(self):
         r=self.client.post('/api/print',headers=self.headers,json={'text':'x'})
@@ -122,11 +132,44 @@ class WebTests(unittest.TestCase):
             self.assertEqual(r.status_code,200)
             self.assertEqual([x['address'] for x in r.json()['devices']],['a'])
 
+class CopyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_completed_single_jobs_with_five_second_gaps(self):
+        printer=e.E10()
+        events=[]
+        async def printed(image,spec):
+            self.assertEqual(spec.copies,1)
+            events.append('completed')
+        async def delay(seconds):
+            self.assertEqual(seconds,1)
+            self.assertIn('jetzt schneiden',printer.phase)
+            events.append('second')
+        with patch.object(printer,'print_text',side_effect=printed), patch.object(e.asyncio,'sleep',side_effect=delay):
+            await printer.print_copies(None,e.PrintSpec(text='Test',copies=3))
+        self.assertEqual(events,['completed']+['second']*5+['completed']+['second']*5+['completed'])
+        self.assertIn('Alle 3',printer.phase)
+
+    async def test_one_copy_has_no_delay(self):
+        printer=e.E10()
+        with patch.object(printer,'print_text',new_callable=AsyncMock) as printed, patch.object(e.asyncio,'sleep',new_callable=AsyncMock) as delay:
+            await printer.print_copies(None,e.PrintSpec(text='Test'))
+            printed.assert_awaited_once()
+            delay.assert_not_awaited()
+
+    async def test_failed_copy_stops_batch(self):
+        printer=e.E10()
+        with patch.object(printer,'print_text',new_callable=AsyncMock,side_effect=RuntimeError('failed')) as printed, patch.object(e.asyncio,'sleep',new_callable=AsyncMock) as delay:
+            with self.assertRaises(RuntimeError):
+                await printer.print_copies(None,e.PrintSpec(text='Test',copies=3))
+            printed.assert_awaited_once()
+            delay.assert_not_awaited()
+            self.assertIn('abgebrochen',printer.phase)
+
+
 class ConfigTests(unittest.TestCase):
     def test_invalid_config(self):
         import os
         for changes in [{'SERVER_PORT':'0'},{'SERVER_SCHEME':'ftp'},{'SERVER_IP':'bad'},
-                        {'ACCESS_TOKEN':'short'},{'SERVER_SCHEME':'https','SSL_CERT_FILE':'','SSL_KEY_FILE':''}]:
+                        {'SERVER_SCHEME':'https','SSL_CERT_FILE':'','SSL_KEY_FILE':''}]:
             with patch.dict(os.environ,changes):
                 with self.assertRaises(ValueError): e.Settings.read()
 

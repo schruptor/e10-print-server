@@ -13,13 +13,16 @@ cd e10-print-server
 ```
 
 Anschließend die Installation für das eigene Betriebssystem weiter unten ausführen.
-Die lokale `.env` wird nicht mitgeliefert: `.env.example` kopieren und einen eigenen
-zufälligen `ACCESS_TOKEN` setzen. Nur den Wert ohne Anführungszeichen in der Oberfläche eingeben.
-Bei „Zugriffsschlüssel fehlt oder ist falsch“ nach einer Schlüsseländerung den Server neu starten.
+Die lokale `.env` wird nicht mitgeliefert: `.env.example` kopieren.
+Es gibt keine Anmeldung. Jeder mit Netzwerkzugriff auf den Server kann drucken.
 
 ## Funktionen
 
-- Browseroberfläche mit Druckerauswahl, Text, Vorschau, Länge, Dichte und Kopien.
+- Browseroberfläche mit Druckerauswahl, Text, Länge, Dichte und Kopien.
+- Immer sichtbare Live-Vorschau: aktualisiert sich beim Einfügen/Tippen und bei jeder Einstellungsänderung (200 ms nach der letzten Eingabe).
+- Kopien als separate Druckaufträge: erst Druckabschluss abwarten, dann fünf Sekunden Schneidepause mit Countdown, danach die nächste Kopie. Keine Pause nach der letzten Kopie.
+- Die Vorschau zeigt ein Etikett; Dichte beeinflusst die Druckwärme, nicht die Bildschirmdarstellung. Kopienzahl und Pausen werden daneben angezeigt.
+- Leerer Text zeigt ein leeres Etikett in der Vorschau, kann aber nicht gedruckt werden.
 - Bluetooth läuft auf dem Serverrechner; Bedienung im LAN auch vom iPhone möglich.
 - Konfigurierbare Bind-IP, Port, HTTP/HTTPS und PEM-Zertifikatspfade.
 - Ein Python-Einstiegspunkt; keine Cloud und kein Node.js im Produktivbetrieb.
@@ -31,7 +34,7 @@ cd ~/e10-print-server
 .venv/bin/python e10_server.py
 ```
 
-Dann http://127.0.0.1:8080 öffnen. ACCESS_TOKEN aus `.env` in das Passwortfeld kopieren.
+Dann http://127.0.0.1:8080 öffnen. Kein Zugriffsschlüssel erforderlich.
 E10 einschalten, gegebenenfalls Verbindung der iPhone-App trennen, **Drucker suchen**,
 den eigenen E10 (oft T0… als Bluetooth-Name) auswählen und **Verbinden**.
 Die Liste enthält auch ähnliche Supvan-Geräte: nur den eigenen E10 auswählen.
@@ -52,18 +55,53 @@ macOS/Linux:
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 cp .env.example .env
-.venv/bin/python -c "import secrets; print(secrets.token_urlsafe(32))"
-# Zufälligen Wert als ACCESS_TOKEN in .env eintragen.
 .venv/bin/python e10_server.py
 ```
 
-Windows PowerShell:
+### Windows: Installation und Verwaltung per Doppelklick
+
+Voraussetzungen: Windows 11 mit Bluetooth LE und installiertes **CPython 3.12–3.14**
+(inklusive Python-Launcher oder `python` im PATH). Der Installer installiert Python
+nicht selbst. Projekt in einen beschreibbaren Ordner entpacken, zum Beispiel
+`C:\Users\Name\Apps\e10-print-server`. Keine Mac-/Linux-`.venv` mitkopieren.
+
+| Datei | Funktion |
+| --- | --- |
+| `install.cmd` | Erstellt die virtuelle Umgebung, lädt Python-Abhängigkeiten und legt eine fehlende `.env` an. |
+| `start.cmd` | Startet den Server im Hintergrund und öffnet die konfigurierte URL im Browser. |
+| `restart.cmd` | Stoppt die verwaltete Instanz und startet sie mit aktuellen Einstellungen neu. |
+| `stop.cmd` | Beendet ausschließlich die durch diese Skripte verwaltete Instanz. |
+
+Zuerst **install.cmd**, dann **start.cmd** doppelklicken. Alternativ in PowerShell:
+
+```powershell
+.\install.cmd
+.\start.cmd
+# Spaeter:
+.\restart.cmd
+.\stop.cmd
+```
+
+Vorhandene `.env` und Druckerauswahl bleiben erhalten. Keine Administratorrechte
+oder dauerhafte Änderung der PowerShell-Ausführungsrichtlinie erforderlich.
+Installation benötigt Internet; es werden keine Firewallregeln oder Autostarts angelegt.
+Die CMD-Dateien starten Windows PowerShell mit einer nur für diesen Aufruf geltenden
+`ExecutionPolicy Bypass`; zentral verwaltete Richtlinien können das weiterhin verhindern.
+
+Logs und Prozesskennung: `.runtime/stdout.log`, `.runtime/stderr.log` und
+`.runtime/server.json`. Logs werden bei jedem Start neu geschrieben.
+Ein belegter Port wird nicht freigeräumt; manuell gestartete Server zuerst manuell stoppen.
+**Stopp/Neustart nur zwischen Druckaufträgen:** Windows beendet den Prozess unmittelbar,
+ein laufender Druck könnte unvollständig bleiben. Danach Drucker erneut verbinden.
+
+Die Windows-Skripte sind auf dem Mac erstellt, aber noch nicht unter Windows ausgeführt.
+Die folgende manuelle Installation bleibt als Alternative verfügbar.
+
+Windows PowerShell (manuell):
 ```powershell
 py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 Copy-Item .env.example .env
-.\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(32))"
-# Zufälligen Wert als ACCESS_TOKEN in .env eintragen.
 .\.venv\Scripts\python.exe e10_server.py
 ```
 
@@ -83,7 +121,6 @@ SERVER_SCHEME=http
 SSL_CERT_FILE=
 SSL_KEY_FILE=
 SSL_KEY_PASSWORD=
-ACCESS_TOKEN=EIN_LANGER_ZUFAELLIGER_SCHLUESSEL
 FONT_PATH=
 ```
 
@@ -124,13 +161,14 @@ Bluetooth läuft ausschließlich auf dem Serverrechner: er muss eingeschaltet un
 Der Browser benötigt keine Web-Bluetooth-Unterstützung.
 
 LAN-Modus nur in einem vertrauenswürdigen Netz, HTTPS empfohlen. Kein Portforwarding ins Internet.
-HTTP verschlüsselt auch den Zugriffsschlüssel nicht. Der Schlüssel schützt alle API-Endpunkte;
-kein Benutzer-/Rechtesystem, keine Internet-Härtung. Nicht als öffentliches Druckgateway einsetzen.
+Keine Authentifizierung: Jeder mit Netzwerkzugriff kann Drucker steuern und drucken.
+HTTPS verschlüsselt die Verbindung, ersetzt aber keine Zugriffskontrolle.
+Kein Benutzer-/Rechtesystem, keine Internet-Härtung. Nicht als öffentliches Druckgateway einsetzen.
 `.env`, Schlüsseldateien und `printer.json` nicht veröffentlichen.
 
 ## Grenzen und Verifikation
 
-- 13 lokale Tests: Authentifizierung, Origin-Prüfung, Eingabelimits, Vorschau,
+- Offline-Tests: Betrieb ohne Anmeldung, Origin-Prüfung, Eingabelimits, Vorschau,
   simulierte Geräteauswahl, Befehlsrahmen, Datenrahmen, Pufferprüfsummen,
   fragmentierte Antworten und Kompression; kein echter Bluetooth-Scan in den Tests.
 - Der Referenzdecoder liest den Python-LZMA-Strom korrekt zurück. Python/liblzma schreibt einen

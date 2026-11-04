@@ -8,7 +8,6 @@ import asyncio
 import base64
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
-import hmac
 import io
 import ipaddress
 import json
@@ -41,7 +40,6 @@ class Settings:
     cert: str | None
     key: str | None
     key_password: str | None
-    token: str
     font: str | None
 
     @classmethod
@@ -69,11 +67,8 @@ class Settings:
         key = path('SSL_KEY_FILE') if scheme == 'https' else None
         if scheme == 'https' and (not cert or not key):
             raise ValueError('HTTPS requires SSL_CERT_FILE and SSL_KEY_FILE; no HTTP fallback')
-        token = os.getenv('ACCESS_TOKEN', '')
-        if len(token) < 24:
-            raise ValueError('Set ACCESS_TOKEN in .env to a random value of at least 24 characters')
         return cls(host, port, scheme, cert, key, os.getenv('SSL_KEY_PASSWORD') or None,
-                   token, path('FONT_PATH'))
+                   path('FONT_PATH'))
 
 
 def command_frame(cmd, a=0, b=0):
@@ -175,7 +170,7 @@ class DeviceChoice(BaseModel):
 
 
 class PrintSpec(BaseModel):
-    text: str = Field(min_length=1, max_length=1000)
+    text: str = Field(max_length=1000)
     length_mm: int = Field(default=50, ge=10, le=200)
     font_size: int = Field(default=36, ge=10, le=80)
     density: int = Field(default=4, ge=1, le=7)
@@ -373,6 +368,22 @@ class E10:
             await asyncio.sleep(.2)
         raise RuntimeError('Zeitüberschreitung beim Druckstatus')
 
+    async def print_copies(self, image, spec):
+        """Finish each individual label before allowing time for manual cutting."""
+        single = spec.model_copy(update={'copies': 1})
+        try:
+            for copy in range(spec.copies):
+                await self.print_text(image, single)
+                if copy + 1 < spec.copies:
+                    for remaining in range(5, 0, -1):
+                        self.phase = (f'Kopie {copy + 1}/{spec.copies} fertig – '
+                                      f'jetzt schneiden! Weiter in {remaining} s')
+                        await asyncio.sleep(1)
+            self.phase = f'Alle {spec.copies} Kopie(n) abgeschlossen'
+        except BaseException:
+            self.phase = 'Kopienauftrag abgebrochen; Gerät prüfen, nicht blind erneut drucken'
+            raise
+
     async def print_text(self, image, spec):
         self.phase = 'Prüfe Drucker und Material'
         await self.wait_status(lambda s: not s['busy'] and not s['printing'], 10)
@@ -419,24 +430,52 @@ class E10:
 
 
 HTML = r'''<!doctype html><html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>E10 Textdruck</title>
-<style>body{font:16px system-ui;background:#10151c;color:#eee;margin:auto;padding:24px;max-width:760px}section{background:#1c2530;border-radius:14px;padding:20px;margin:18px 0}input,select,textarea,button{font:inherit;padding:10px;border-radius:7px;border:1px solid #617183;box-sizing:border-box}textarea{width:100%;min-height:110px}button{background:#81dcbb;color:#10211c;cursor:pointer;margin:8px 4px 8px 0}button:disabled{opacity:.4}label{display:inline-block;margin:8px 12px 8px 0}input[type=number]{width:100px}img{max-width:100%;height:auto;background:white;image-rendering:pixelated;border:8px solid white}#msg{white-space:pre-wrap}small{color:#bbc8d5}#token{width:100%}</style>
+<style>body{font:16px system-ui;background:#10151c;color:#eee;margin:auto;padding:24px;max-width:760px}section{background:#1c2530;border-radius:14px;padding:20px;margin:18px 0}input,select,textarea,button{font:inherit;padding:10px;border-radius:7px;border:1px solid #617183;box-sizing:border-box}textarea{width:100%;min-height:110px}button{background:#81dcbb;color:#10211c;cursor:pointer;margin:8px 4px 8px 0}button:disabled{opacity:.4}label{display:inline-block;margin:8px 12px 8px 0}input[type=number]{width:100px}img{max-width:100%;height:auto;background:white;image-rendering:pixelated;border:8px solid white}#msg{white-space:pre-wrap}small{color:#bbc8d5}</style>
 <h1>E10 · Textdruck</h1><small>Experimenteller Treiber · Erst mit einem einzelnen kurzen Etikett testen.</small>
-<section><label for="token">Zugriffsschlüssel aus der .env</label><input id="token" type="password" autocomplete="off" placeholder="ACCESS_TOKEN"><small>Bleibt nur im Arbeitsspeicher dieser Seite.</small></section>
 <section><h2>1. Drucker auswählen</h2><button id="scan">Drucker suchen</button><select id="devices" aria-label="Bluetooth-Drucker"></select><button id="connect">Verbinden</button><button id="disconnect">Trennen</button><p id="state">Nicht verbunden</p><small>Der E10 kann einen Namen wie T0179… haben. Die Suche läuft auf dem Server, nicht auf dem iPhone.</small></section>
-<section><h2>2. Text gestalten</h2><textarea id="text" maxlength="1000" placeholder="Dein Etikettentext">Hallo E10!</textarea><label>Länge (mm)<br><input id="length" type="number" min="10" max="200" value="50"></label><label>Schriftgröße (max.)<br><input id="font" type="number" min="10" max="80" value="36"></label><label>Dichte<br><input id="density" type="number" min="1" max="7" value="4"></label><label>Kopien<br><input id="copies" type="number" min="1" max="10" value="1"></label><p><small>96 Druckpunkte hoch, Text mittig in 88 Punkten. Schrift wird bei Bedarf verkleinert; kein stilles Abschneiden. Emojis benötigen eine passende Schrift.</small></p><button id="preview">Vorschau</button><button id="print">Drucken</button><p><img id="image" alt="Etikettenvorschau" hidden></p></section><p id="msg" role="status"></p>
+<section><h2>2. Text gestalten</h2><textarea id="text" maxlength="1000" placeholder="Dein Etikettentext">Hallo E10!</textarea><label>Länge (mm)<br><input id="length" type="number" min="10" max="200" value="50"></label><label>Schriftgröße (max.)<br><input id="font" type="number" min="10" max="80" value="36"></label><label>Dichte<br><input id="density" type="number" min="1" max="7" value="4"></label><label>Kopien<br><input id="copies" type="number" min="1" max="10" value="1"></label><p><small>96 Druckpunkte hoch, Text mittig in 88 Punkten. Schrift wird bei Bedarf verkleinert; kein stilles Abschneiden. Emojis benötigen eine passende Schrift.</small></p><button id="print">Drucken</button><h3>Live-Vorschau</h3><p><img id="image" alt="Etikettenvorschau" width="400" height="96" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></p><p id="previewInfo" role="status" aria-live="polite"></p><small>Vorschau eines Etiketts. Dichte steuert die Druckwärme, nicht die Bildschirmdarstellung. Zwischen Kopien: 5 Sekunden Zeit zum Schneiden.</small></section><p id="msg" role="status"></p>
 <script>
 const $=id=>document.getElementById(id);let busy=false,connected=false;
 const spec=()=>({text:$('text').value,length_mm:Number($('length').value),font_size:Number($('font').value),density:Number($('density').value),copies:Number($('copies').value)});
-async function api(path,data){const r=await fetch('/api/'+path,{method:data===undefined?'GET':'POST',headers:{'Content-Type':'application/json','X-E10-Key':$('token').value},body:data===undefined?undefined:JSON.stringify(data)});let v=await r.json();if(!r.ok)throw Error(typeof v.detail==='string'?v.detail:JSON.stringify(v.detail));return v}
+async function api(path,data,signal){const r=await fetch('/api/'+path,{method:data===undefined?'GET':'POST',headers:{'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data),signal});let v=await r.json();if(!r.ok)throw Error(typeof v.detail==='string'?v.detail:JSON.stringify(v.detail));return v}
 async function status(){const s=await api('status');connected=s.connected;$('state').textContent=(connected?'Verbunden: ':'Nicht verbunden: ')+(s.selected?.name||'kein Drucker ausgewählt')+' · '+s.phase;if(s.selected&&!$('devices').options.length){const o=new Option(s.selected.name+' (gespeichert)',s.selected.address);$('devices').add(o)}}
 async function run(fn){if(busy)return;busy=true;document.querySelectorAll('button').forEach(b=>b.disabled=true);$('msg').textContent='Bitte warten …';try{await fn();$('msg').textContent='Fertig.'}catch(e){$('msg').textContent=e.message}finally{busy=false;document.querySelectorAll('button').forEach(b=>b.disabled=false);try{await status()}catch{}}}
 $('scan').onclick=()=>run(async()=>{const d=await api('scan',{});$('devices').replaceChildren();for(const x of d.devices)$('devices').add(new Option(x.name+' · '+x.address,x.address));if(!d.devices.length)throw Error('Keine passenden Geräte gefunden. E10 einschalten und iPhone-App trennen.')});
 $('connect').onclick=()=>run(async()=>{if(!$('devices').value)throw Error('Erst Drucker auswählen');await api('connect',{address:$('devices').value})});
 $('disconnect').onclick=()=>run(()=>api('disconnect',{}));
-$('preview').onclick=()=>run(async()=>{const p=await api('preview',spec());$('image').src=p.image;$('image').hidden=false});
+let previewTimer,previewRequest,previewRevision=0;
+async function updatePreview(revision=++previewRevision){
+    previewRequest?.abort();
+    const request=new AbortController();previewRequest=request;
+    const data=spec();
+    try{
+        const p=await api('preview',data,request.signal);
+        if(revision!==previewRevision)return;
+        $('image').src=p.image;
+        $('image').width=data.length_mm*8;$('image').height=96;
+        $('image').style.opacity='1';
+        $('previewInfo').textContent=data.length_mm+' mm · Dichte '+data.density+' · '+data.copies+' Kopie(n)'+(data.copies>1?' · 5 s Schneidepause zwischen Kopien':'');
+    }catch(e){
+        if(revision!==previewRevision||e.name==='AbortError')return;
+        $('image').style.opacity='.35';
+        $('previewInfo').textContent='Vorschau nicht aktuell: '+e.message;
+    }
+}
+function schedulePreview(){
+    clearTimeout(previewTimer);previewRequest?.abort();
+    const revision=++previewRevision;
+    $('image').style.opacity='.5';
+    $('previewInfo').textContent='Vorschau wird aktualisiert …';
+    previewTimer=setTimeout(()=>updatePreview(revision),200);
+}
+for(const id of ['text','length','font','density','copies']){
+    $(id).addEventListener('input',schedulePreview);
+    $(id).addEventListener('change',schedulePreview);
+}
+updatePreview();
 $('print').onclick=()=>run(async()=>{if(!connected)throw Error('Bitte zuerst den E10 verbinden');await api('print',spec())});
-$('token').onchange=()=>status().catch(e=>$('msg').textContent=e.message);
-setInterval(()=>{if($('token').value)status().catch(()=>{})},2000);
+status().catch(e=>$('msg').textContent=e.message);
+setInterval(()=>status().catch(()=>{}),2000);
 </script></html>'''
 
 
@@ -456,8 +495,6 @@ def create_app(settings):
             origin = request.headers.get('origin')
             if origin and origin != f'{request.url.scheme}://{request.url.netloc}':
                 return JSONResponse({'detail': 'Fremder Origin abgelehnt'}, status_code=403)
-            if not hmac.compare_digest(request.headers.get('x-e10-key', ''), settings.token):
-                return JSONResponse({'detail': 'Zugriffsschlüssel fehlt oder ist falsch'}, status_code=401)
             # Stream limit, including chunked bodies; replay the bounded body for FastAPI.
             body = bytearray()
             async for chunk in request.stream():
@@ -521,7 +558,8 @@ def create_app(settings):
     @app.post('/api/preview')
     async def preview(spec: PrintSpec):
         try:
-            image = render(spec, settings.font)
+            image = (render(spec, settings.font) if spec.text.strip() else
+                     Image.new('L', (spec.length_mm * 8, 96), 255))
         except (ValueError, UnicodeError) as exc:
             raise HTTPException(400, str(exc)) from exc
         b = io.BytesIO()
@@ -534,7 +572,7 @@ def create_app(settings):
             if not printer.connected:
                 raise HTTPException(409, 'Zuerst Drucker verbinden')
             image = render(spec, settings.font)
-            await printer.print_text(image, spec)
+            await printer.print_copies(image, spec)
             return {'message': 'Drucker meldet Druckabschluss', 'copies': spec.copies}
     return app
 
