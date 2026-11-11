@@ -5,7 +5,9 @@ HTTP-API und Treiber. Keine Cloud, kein Node.js für den Betrieb. Unterstütztes
 Windows mit einem funktionierenden Bluetooth-LE-Adapter. Tatsächlich eingerichtet und offline getestet
 wurde der Mac. Zusätzlich wurden die portable Windows-Laufzeit, ihre Imports,
 Textdarstellung und der HTTP-Serverstart erfolgreich auf einem Windows-GitHub-Runner geprüft.
-Bluetooth-Hardwaredruck auf dem Windows-Ziel-PC und Linux-Betrieb sind noch nicht bestätigt.
+Auf einem Raspberry Pi 5 wurden außerdem Server, Vorschau und die E10-BLE-Verbindung
+nach Dienstneustart bestätigt. Hardwaredruck unter Windows/Linux bleibt separat zu testen.
+Die BlueZ-Fehlerbehebung ist unter [Raspberry Pi / BLE-only](RASPBERRY-PI.md) dokumentiert.
 
 ## Windows ohne Installation (portables ZIP)
 
